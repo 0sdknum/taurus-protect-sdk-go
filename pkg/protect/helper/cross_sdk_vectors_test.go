@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/crypto"
@@ -14,11 +13,11 @@ import (
 // vectorsFile holds the parsed test vectors from the shared JSON file.
 type vectorsFile struct {
 	Vectors struct {
-		HexHash              []hexHashVector              `json:"hex_hash"`
-		HMACSHA256           []hmacVector                 `json:"hmac_sha256"`
-		ConstantTimeCompare  []constantTimeCompareVector  `json:"constant_time_compare"`
-		LegacyHashAddress    []legacyHashAddressVector    `json:"legacy_hash_address"`
-		LegacyHashAsset      []legacyHashAssetVector      `json:"legacy_hash_asset"`
+		HexHash             []hexHashVector             `json:"hex_hash"`
+		HMACSHA256          []hmacVector                `json:"hmac_sha256"`
+		ConstantTimeCompare []constantTimeCompareVector `json:"constant_time_compare"`
+		LegacyHashAddress   []legacyHashAddressVector   `json:"legacy_hash_address"`
+		LegacyHashAsset     []legacyHashAssetVector     `json:"legacy_hash_asset"`
 	} `json:"vectors"`
 }
 
@@ -43,37 +42,29 @@ type constantTimeCompareVector struct {
 }
 
 type legacyHashAddressVector struct {
-	Description                  string `json:"description"`
-	Payload                      string `json:"payload"`
-	OriginalHash                 string `json:"original_hash"`
-	ExpectedWithoutContractType  string `json:"expected_without_contract_type"`
-	ExpectedWithoutLabels        string `json:"expected_without_labels"`
-	ExpectedWithoutBoth          string `json:"expected_without_both"`
-	ExpectedLegacyCount          int    `json:"expected_legacy_count"`
+	Description                 string `json:"description"`
+	Payload                     string `json:"payload"`
+	OriginalHash                string `json:"original_hash"`
+	ExpectedWithoutContractType string `json:"expected_without_contract_type"`
+	ExpectedWithoutLabels       string `json:"expected_without_labels"`
+	ExpectedWithoutBoth         string `json:"expected_without_both"`
+	ExpectedLegacyCount         int    `json:"expected_legacy_count"`
 }
 
 type legacyHashAssetVector struct {
-	Description              string `json:"description"`
-	Payload                  string `json:"payload"`
-	OriginalHash             string `json:"original_hash"`
-	ExpectedWithoutIsNFT     string `json:"expected_without_is_nft"`
-	ExpectedWithoutKindType  string `json:"expected_without_kind_type"`
-	ExpectedWithoutBoth      string `json:"expected_without_both"`
-	ExpectedLegacyCount      int    `json:"expected_legacy_count"`
+	Description             string `json:"description"`
+	Payload                 string `json:"payload"`
+	OriginalHash            string `json:"original_hash"`
+	ExpectedWithoutIsNFT    string `json:"expected_without_is_nft"`
+	ExpectedWithoutKindType string `json:"expected_without_kind_type"`
+	ExpectedWithoutBoth     string `json:"expected_without_both"`
+	ExpectedLegacyCount     int    `json:"expected_legacy_count"`
 }
 
 func loadVectors(t *testing.T) *vectorsFile {
 	t.Helper()
 
-	// Get directory of this test file
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("Failed to get caller info")
-	}
-
-	// Navigate to repo root: helper/ -> protect/ -> pkg/ -> sdk-go/ -> repo/
-	repoRoot := filepath.Join(filepath.Dir(filename), "..", "..", "..", "..")
-	vectorsPath := filepath.Join(repoRoot, "docs", "test-vectors", "crypto-test-vectors.json")
+	vectorsPath := filepath.Join("testdata", "crypto-test-vectors.json")
 
 	data, err := os.ReadFile(vectorsPath)
 	if err != nil {

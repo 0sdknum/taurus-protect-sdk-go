@@ -150,6 +150,23 @@ type ListWhitelistedAddressesOptions struct {
 	IncludeForApproval bool
 }
 
+// CreateWhitelistedAddressRequest contains parameters for creating a whitelisted address.
+type CreateWhitelistedAddressRequest struct {
+	Address                  string   `json:"address"`
+	Memo                     string   `json:"memo,omitempty"`
+	Label                    string   `json:"label"`
+	ExchangeAccountID        string   `json:"exchange_account_id,omitempty"`
+	CustomerID               string   `json:"customer_id,omitempty"`
+	LinkedInternalAddressIDs []string `json:"linked_internal_address_ids,omitempty"`
+	AddressType              string   `json:"address_type,omitempty"`
+	ContractType             string   `json:"contract_type,omitempty"`
+	LinkedWalletIDs          []string `json:"linked_wallet_ids,omitempty"`
+	Blockchain               string   `json:"blockchain"`
+	Network                  string   `json:"network,omitempty"`
+	VisibilityGroupID        string   `json:"visibility_group_id,omitempty"`
+	Currency                 string   `json:"currency,omitempty"`
+}
+
 // WhitelistedAddressEnvelope wraps a whitelisted address with its verification data.
 // This is returned by GetWhitelistedAddressEnvelope after the 6-step verification flow.
 type WhitelistedAddressEnvelope struct {

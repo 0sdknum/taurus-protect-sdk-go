@@ -3,6 +3,7 @@ package service
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/0sdknum/taurus-protect-sdk-go/internal/openapi"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
@@ -202,6 +203,70 @@ func TestMapOpenAPIError_NilResponse(t *testing.T) {
 	// Should return the original error when response is nil
 	if err != mockErr {
 		t.Errorf("mapOpenAPIError(err, nil) should return original error")
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "seconds", value: "7", want: 7 * time.Second},
+		{name: "HTTP date", value: now.Add(11 * time.Second).Format(http.TimeFormat), want: 11 * time.Second},
+		{name: "expired HTTP date", value: now.Add(-time.Second).Format(http.TimeFormat)},
+		{name: "invalid", value: "later"},
+		{name: "zero seconds", value: "0"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := parseRetryAfter(test.value, now); got != test.want {
+				t.Fatalf("parseRetryAfter(%q) = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseOpenAPIErrorBody(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		message   string
+		errorCode string
+	}{
+		{
+			name:      "grpc gateway status",
+			body:      `{"code":3,"message":"invalid contract parameters","details":[]}`,
+			message:   "invalid contract parameters",
+			errorCode: "3",
+		},
+		{
+			name:      "nested error",
+			body:      `{"error":{"errorCode":"InvalidArgument","message":"invalid method"}}`,
+			message:   "invalid method",
+			errorCode: "InvalidArgument",
+		},
+		{
+			name: "invalid JSON",
+			body: `Bad Request`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message, errorCode := parseOpenAPIErrorBody([]byte(test.body))
+			if message != test.message || errorCode != test.errorCode {
+				t.Fatalf(
+					"parseOpenAPIErrorBody() = (%q, %q), want (%q, %q)",
+					message,
+					errorCode,
+					test.message,
+					test.errorCode,
+				)
+			}
+		})
 	}
 }
 

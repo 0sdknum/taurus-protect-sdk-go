@@ -3,9 +3,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/0sdknum/taurus-protect-sdk-go/internal/openapi"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/mapper"
@@ -252,42 +255,98 @@ func mapOpenAPIError(err *openapi.GenericOpenAPIError, resp *http.Response) erro
 	}
 
 	code := resp.StatusCode
-	message := err.Error()
+	responseBody := strings.TrimSpace(string(err.Body()))
+	message, errorCode := parseOpenAPIErrorBody(err.Body())
+	if message == "" {
+		message = err.Error()
+	}
 
-	// Create typed error based on status code
+	apiError := &APIError{
+		Code:         code,
+		StatusCode:   code,
+		Message:      message,
+		ErrorCode:    errorCode,
+		ResponseBody: responseBody,
+		Err:          err,
+	}
+
 	switch {
 	case code == 400:
-		return &APIError{Code: code, Message: message, Description: "Bad Request"}
+		apiError.Description = "Bad Request"
 	case code == 401:
-		return &APIError{Code: code, Message: message, Description: "Unauthorized"}
+		apiError.Description = "Unauthorized"
 	case code == 403:
-		return &APIError{Code: code, Message: message, Description: "Forbidden"}
+		apiError.Description = "Forbidden"
 	case code == 404:
-		return &APIError{Code: code, Message: message, Description: "Not Found"}
+		apiError.Description = "Not Found"
 	case code == 429:
-		return &APIError{Code: code, Message: message, Description: "Rate Limited"}
+		apiError.Description = "Rate Limited"
+		apiError.RetryAfter = parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case code >= 500:
-		return &APIError{Code: code, Message: message, Description: "Server Error"}
-	default:
-		return &APIError{Code: code, Message: message}
+		apiError.Description = "Server Error"
 	}
+
+	return apiError
 }
 
-// APIError represents an API error from the service layer.
-type APIError struct {
-	Code        int
-	Message     string
-	Description string
-	Err         error
-}
-
-func (e *APIError) Error() string {
-	if e.Description != "" {
-		return fmt.Sprintf("%s: %s (code=%d)", e.Description, e.Message, e.Code)
+func parseOpenAPIErrorBody(body []byte) (string, string) {
+	var payload map[string]any
+	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
+		return "", ""
 	}
-	return fmt.Sprintf("%s (code=%d)", e.Message, e.Code)
+
+	message := firstString(payload, "message", "detail", "description", "error_description")
+	errorCode := firstScalar(payload, "errorCode", "error_code", "code")
+
+	if nested, ok := payload["error"].(map[string]any); ok {
+		if message == "" {
+			message = firstString(nested, "message", "detail", "description")
+		}
+		if errorCode == "" {
+			errorCode = firstScalar(nested, "errorCode", "error_code", "code")
+		}
+	} else if message == "" {
+		message, _ = payload["error"].(string)
+	}
+
+	return message, errorCode
 }
 
-func (e *APIError) Unwrap() error {
-	return e.Err
+func firstString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := payload[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
 }
+
+func firstScalar(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		switch value := payload[key].(type) {
+		case string:
+			if value != "" {
+				return value
+			}
+		case float64:
+			return strconv.FormatFloat(value, 'f', -1, 64)
+		}
+	}
+	return ""
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	seconds, err := strconv.ParseInt(value, 10, 64)
+	if err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	retryAt, err := http.ParseTime(value)
+	if err != nil || !retryAt.After(now) {
+		return 0
+	}
+	return retryAt.Sub(now)
+}
+
+// APIError is the API error type returned by high-level services.
+type APIError = model.APIError

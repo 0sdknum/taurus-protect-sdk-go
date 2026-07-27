@@ -11,8 +11,8 @@ An independent Go-only fork of the official [Taurus-PROTECT SDK](https://github.
 
 - Extracted from the upstream `taurus-protect-sdk-go` module without the Java, Python, and TypeScript SDKs.
 - Distributed as the standalone module `github.com/0sdknum/taurus-protect-sdk-go`.
-- Currently preserves the upstream public API, with imports moved to the standalone module path.
-- Intended for focused Go SDK maintenance and public high-level wrappers around Taurus-PROTECT operations already present in the generated API client.
+- Preserves the upstream public API while adding public high-level wrappers for Taurus-PROTECT operations that were previously available only through the generated internal client.
+- The `v0.2.0` release adds outgoing contract calls and deployments, whitelisted-address creation, and richer API error details.
 - Generated OpenAPI and protobuf code remains under `internal/` and must not be edited manually.
 
 Fork-specific changes should remain generic and suitable for contribution back to upstream. See the repository releases for the exact upstream base and changes included in each published version.
@@ -32,56 +32,79 @@ Fork-specific changes should remain generic and suitable for contribution back t
 
 ### Prerequisites
 
-- Go 1.24 or higher
+- Go 1.26 or higher
 - Go modules enabled
 
 ### Installation
 
-After the first fork release is published, install the latest tagged version using Go modules:
+Install the latest tagged version using Go modules:
 
 ```bash
 go get github.com/0sdknum/taurus-protect-sdk-go@latest
 ```
 
-Applications import the fork directly. `go get` records the resolved version in `go.mod`; a `replace` directive is not required.
+Applications import the fork directly. `go get` records the resolved version in `go.mod`; a `replace` directive is not required. Transitive dependencies are declared by this module and must not be installed individually.
 
 ### Dependencies
 
 The SDK requires the following packages (installed automatically):
 
-| Package                      | Purpose                       |
-| ---------------------------- | ----------------------------- |
-| `google.golang.org/protobuf` | Protocol buffer support       |
-| Standard library             | HTTP client, crypto, encoding |
+| Package                                      | Purpose                         |
+| -------------------------------------------- | ------------------------------- |
+| `github.com/google/uuid`                     | TPV1 request nonces             |
+| `github.com/grpc-ecosystem/grpc-gateway/v2` | Generated protobuf JSON support |
+| `golang.org/x/net`                           | Generated HTTP helpers          |
+| `google.golang.org/genproto`                 | Generated Google API types      |
+| `google.golang.org/protobuf`                 | Protocol buffer support         |
+| Standard library                             | HTTP client, crypto, encoding   |
 
 ### Client Initialization
 
 Credentials, SuperAdmin public keys, and a positive minimum signature count are required when creating a client:
 
 ```go
-import "github.com/0sdknum/taurus-protect-sdk-go/pkg/protect"
+package main
 
-superAdminKeys := []string{
-    "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...\n-----END PUBLIC KEY-----",
-    "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...\n-----END PUBLIC KEY-----",
-}
+import (
+    "context"
+    "log"
 
-client, err := protect.NewClient(
-    apiHost,
-    protect.WithCredentials(apiKey, apiSecret),
-    protect.WithSuperAdminKeysPEM(superAdminKeys),
-    protect.WithMinValidSignatures(2),
+    "github.com/0sdknum/taurus-protect-sdk-go/pkg/protect"
 )
-if err != nil {
-    log.Fatal(err)
-}
-defer client.Close()
 
-wallets, _, err := client.Wallets().ListWallets(ctx, nil)
-if err != nil {
-    return err
+const (
+    apiHost   = "https://your-taurus-protect-host"
+    apiKey    = "your-api-key"
+    apiSecret = "your-hex-encoded-api-secret"
+)
+
+var superAdminKeys = []string{
+    `-----BEGIN PUBLIC KEY-----
+REPLACE_WITH_BASE64_DER_PUBLIC_KEY
+-----END PUBLIC KEY-----`,
+}
+
+func main() {
+    client, err := protect.NewClient(
+        apiHost,
+        protect.WithCredentials(apiKey, apiSecret),
+        protect.WithSuperAdminKeysPEM(superAdminKeys),
+        protect.WithMinValidSignatures(1),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    wallets, _, err := client.Wallets().ListWallets(context.Background(), nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    log.Printf("wallets: %d", len(wallets))
 }
 ```
+
+Replace every placeholder locally. Never commit API credentials or real public/private key material.
 
 See [Authentication](docs/AUTHENTICATION.md) for more initialization options.
 
@@ -95,12 +118,12 @@ The SDK provides 43 services organized into core services and the TaurusNetwork 
 | ----------------------------- | ------------------------------- | -------------------------------------------- |
 | `WalletService`               | `client.Wallets()`              | Wallet creation, retrieval, balance history  |
 | `AddressService`              | `client.Addresses()`            | Address management, proof of reserve         |
-| `RequestService`              | `client.Requests()`             | Transaction requests and approvals           |
+| `RequestService`              | `client.Requests()`             | Transfers, contract calls/deployments, approvals |
 | `TransactionService`          | `client.Transactions()`         | Transaction queries and export               |
 | `BalanceService`              | `client.Balances()`             | Balance queries across assets                |
 | `CurrencyService`             | `client.Currencies()`           | Currency and blockchain information          |
 | `GovernanceRuleService`       | `client.GovernanceRules()`      | Governance rules with signature verification |
-| `WhitelistedAddressService`   | `client.WhitelistedAddresses()` | Address whitelisting with verification       |
+| `WhitelistedAddressService`   | `client.WhitelistedAddresses()` | Address creation, lookup, and verification   |
 | `WhitelistedAssetService`     | `client.WhitelistedAssets()`    | Asset/contract whitelisting                  |
 | `AuditService`                | `client.Audits()`               | Audit log queries                            |
 | `ChangeService`               | `client.Changes()`              | Configuration change tracking                |
@@ -179,6 +202,56 @@ if err != nil {
     return err
 }
 fmt.Printf("Created wallet ID: %s\n", wallet.ID)
+```
+
+### Create a CMTA20 Contract Call
+
+Contract calls are real state-changing Taurus-PROTECT requests. Amounts and ABI
+integer arguments use decimal base-unit strings. CMTA20 mutable operations use
+the legacy `Method` form; do not also set `Call` in the same request.
+
+```go
+request, err := client.Requests().CreateOutgoingCallContractRequest(ctx, &model.CreateOutgoingCallContractRequest{
+    FromAddressID:          "your-source-address-id",
+    ToWhitelistedAddressID: "your-contract-whitelisted-address-id",
+    ContractType:           "CMTA20",
+    Amount:                 "0",
+    ExternalRequestID:      "your-idempotency-key",
+    Method: model.ContractCall{
+        FunctionSignature: "mint(address,uint256)",
+        Arguments: []model.ContractArgument{
+            {
+                Name:  "to",
+                Type:  "address",
+                Value: &model.ContractArgumentValue{Primitive: "your-recipient-address"},
+            },
+            {
+                Name:  "amount",
+                Type:  "uint256",
+                Value: &model.ContractArgumentValue{Primitive: "1"},
+            },
+        },
+    },
+})
+if err != nil {
+    return err
+}
+fmt.Printf("Created request ID: %s\n", request.ID)
+```
+
+### Create a Whitelisted Address
+
+```go
+id, err := client.WhitelistedAddresses().CreateWhitelistedAddress(ctx, &model.CreateWhitelistedAddressRequest{
+    Address:    "your-external-address",
+    Blockchain: "ETH",
+    Network:    "your-network",
+    Label:      "your-label",
+})
+if err != nil {
+    return err
+}
+fmt.Printf("Created whitelisted address ID: %s\n", id)
 ```
 
 ### Approve Transaction Requests
@@ -300,7 +373,7 @@ See [Usage Examples](docs/USAGE_EXAMPLES.md) for comprehensive examples.
 
 ### Running Tests
 
-The standalone fork currently does not contain the upstream cross-SDK vector file expected by `pkg/protect/helper/cross_sdk_vectors_test.go`. Tests outside those vectors can be run normally; the complete `./build.sh unit` gate will remain blocked until the vectors are made self-contained in this repository.
+Cross-SDK crypto vectors are stored in package-local `testdata`, so the complete unit-test gate is self-contained and works from a downloaded Go module.
 
 ```bash
 # Run all unit tests (includes verbose output and coverage)

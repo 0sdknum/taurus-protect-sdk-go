@@ -88,6 +88,70 @@ func (s *WhitelistedAddressService) GetWhitelistedAddress(ctx context.Context, i
 	return addr, nil
 }
 
+// CreateWhitelistedAddress creates a whitelisted address and returns its ID.
+func (s *WhitelistedAddressService) CreateWhitelistedAddress(ctx context.Context, request *model.CreateWhitelistedAddressRequest) (string, error) {
+	if request == nil {
+		return "", fmt.Errorf("request cannot be nil")
+	}
+	if request.Address == "" {
+		return "", fmt.Errorf("address is required")
+	}
+	if request.Label == "" {
+		return "", fmt.Errorf("label is required")
+	}
+	if request.Blockchain == "" {
+		return "", fmt.Errorf("blockchain is required")
+	}
+
+	createRequest := openapi.TgvalidatordCreateWhitelistedAddressRequest{
+		Address:    request.Address,
+		Label:      request.Label,
+		Blockchain: request.Blockchain,
+	}
+	if request.Memo != "" {
+		createRequest.Memo = new(request.Memo)
+	}
+	if request.ExchangeAccountID != "" {
+		createRequest.ExchangeAccountId = new(request.ExchangeAccountID)
+	}
+	if request.CustomerID != "" {
+		createRequest.CustomerId = new(request.CustomerID)
+	}
+	if len(request.LinkedInternalAddressIDs) > 0 {
+		createRequest.LinkedInternalAddressIds = append([]string(nil), request.LinkedInternalAddressIDs...)
+	}
+	if request.AddressType != "" {
+		createRequest.AddressType = new(request.AddressType)
+	}
+	if request.ContractType != "" {
+		createRequest.ContractType = new(request.ContractType)
+	}
+	if len(request.LinkedWalletIDs) > 0 {
+		createRequest.LinkedWalletIds = append([]string(nil), request.LinkedWalletIDs...)
+	}
+	if request.Network != "" {
+		createRequest.Network = new(request.Network)
+	}
+	if request.VisibilityGroupID != "" {
+		createRequest.VisibilityGroupID = new(request.VisibilityGroupID)
+	}
+	if request.Currency != "" {
+		createRequest.Currency = new(request.Currency)
+	}
+
+	response, httpResponse, err := s.api.WhitelistServiceCreateWhitelistedAddress(ctx).
+		Body(createRequest).
+		Execute()
+	if err != nil {
+		return "", s.errMapper.MapError(err, httpResponse)
+	}
+	if response == nil || response.Result == nil || response.Result.Id == nil || *response.Result.Id == "" {
+		return "", fmt.Errorf("failed to create whitelisted address: no ID returned")
+	}
+
+	return *response.Result.Id, nil
+}
+
 // ListWhitelistedAddresses retrieves a list of whitelisted addresses.
 // If verification is enabled (SuperAdmin keys configured), each address integrity
 // will be cryptographically verified before being returned. If any address fails

@@ -5,148 +5,66 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
 )
 
 // APIError is the base error type for all Taurus-PROTECT API errors.
-// It captures HTTP status codes, error messages, and provides helper methods
-// for common error handling patterns.
-type APIError struct {
-	// Message is the human-readable error message.
-	Message string
-	// Code is the HTTP status code.
-	Code int
-	// Description is the error description from the API.
-	Description string
-	// ErrorCode is the application-specific error code.
-	ErrorCode string
-	// Err is the underlying error that caused this error.
-	Err error
-	// RetryAfter is the suggested retry delay for rate limit errors.
-	RetryAfter time.Duration
-}
-
-func (e *APIError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("%s (code=%d)", e.Message, e.Code)
-	}
-	if e.Description != "" {
-		return fmt.Sprintf("%s (code=%d)", e.Description, e.Code)
-	}
-	return fmt.Sprintf("API error (code=%d)", e.Code)
-}
-
-// Unwrap returns the underlying error.
-func (e *APIError) Unwrap() error {
-	return e.Err
-}
-
-// IsRetryable returns true if the request might succeed on retry.
-// This is true for 429 (rate limited) and 5xx (server errors).
-func (e *APIError) IsRetryable() bool {
-	return e.Code == 429 || e.Code >= 500
-}
-
-// IsClientError returns true if this is a client error (4xx).
-func (e *APIError) IsClientError() bool {
-	return e.Code >= 400 && e.Code < 500
-}
-
-// IsServerError returns true if this is a server error (5xx).
-func (e *APIError) IsServerError() bool {
-	return e.Code >= 500
-}
-
-// SuggestedRetryDelay returns the suggested delay before retrying.
-// For rate limit errors, this returns the Retry-After value if available.
-// For server errors, returns a default backoff value.
-// For non-retryable errors, returns 0.
-func (e *APIError) SuggestedRetryDelay() time.Duration {
-	if e.Code == 429 {
-		if e.RetryAfter > 0 {
-			return e.RetryAfter
-		}
-		return time.Second // Default 1 second for rate limits
-	}
-	if e.Code >= 500 {
-		return 5 * time.Second // Default 5 seconds for server errors
-	}
-	return 0
-}
+type APIError = model.APIError
 
 // Sentinel errors for type checking with errors.Is().
 var (
 	// ErrValidation indicates a 400 Bad Request error.
-	ErrValidation = &APIError{Code: 400, Message: "validation error"}
+	ErrValidation = &APIError{Code: 400, StatusCode: 400, Message: "validation error"}
 	// ErrAuthentication indicates a 401 Unauthorized error.
-	ErrAuthentication = &APIError{Code: 401, Message: "authentication error"}
+	ErrAuthentication = &APIError{Code: 401, StatusCode: 401, Message: "authentication error"}
 	// ErrAuthorization indicates a 403 Forbidden error.
-	ErrAuthorization = &APIError{Code: 403, Message: "authorization error"}
+	ErrAuthorization = &APIError{Code: 403, StatusCode: 403, Message: "authorization error"}
 	// ErrNotFound indicates a 404 Not Found error.
-	ErrNotFound = &APIError{Code: 404, Message: "not found"}
+	ErrNotFound = &APIError{Code: 404, StatusCode: 404, Message: "not found"}
 	// ErrRateLimit indicates a 429 Too Many Requests error.
-	ErrRateLimit = &APIError{Code: 429, Message: "rate limit exceeded"}
+	ErrRateLimit = &APIError{Code: 429, StatusCode: 429, Message: "rate limit exceeded"}
 	// ErrServer indicates a 5xx server error.
-	ErrServer = &APIError{Code: 500, Message: "server error"}
+	ErrServer = &APIError{Code: 500, StatusCode: 500, Message: "server error"}
 )
-
-// Is implements errors.Is for APIError.
-func (e *APIError) Is(target error) bool {
-	t, ok := target.(*APIError)
-	if !ok {
-		return false
-	}
-	// Match by HTTP status code category
-	switch t.Code {
-	case 400:
-		return e.Code == 400
-	case 401:
-		return e.Code == 401
-	case 403:
-		return e.Code == 403
-	case 404:
-		return e.Code == 404
-	case 429:
-		return e.Code == 429
-	case 500:
-		return e.Code >= 500
-	default:
-		return e.Code == t.Code
-	}
-}
 
 // ValidationError creates a new validation error (400).
 func ValidationError(message string, err error) *APIError {
 	return &APIError{
-		Code:    400,
-		Message: message,
-		Err:     err,
+		Code:       400,
+		StatusCode: 400,
+		Message:    message,
+		Err:        err,
 	}
 }
 
 // AuthenticationError creates a new authentication error (401).
 func AuthenticationError(message string, err error) *APIError {
 	return &APIError{
-		Code:    401,
-		Message: message,
-		Err:     err,
+		Code:       401,
+		StatusCode: 401,
+		Message:    message,
+		Err:        err,
 	}
 }
 
 // AuthorizationError creates a new authorization error (403).
 func AuthorizationError(message string, err error) *APIError {
 	return &APIError{
-		Code:    403,
-		Message: message,
-		Err:     err,
+		Code:       403,
+		StatusCode: 403,
+		Message:    message,
+		Err:        err,
 	}
 }
 
 // NotFoundError creates a new not found error (404).
 func NotFoundError(message string, err error) *APIError {
 	return &APIError{
-		Code:    404,
-		Message: message,
-		Err:     err,
+		Code:       404,
+		StatusCode: 404,
+		Message:    message,
+		Err:        err,
 	}
 }
 
@@ -154,6 +72,7 @@ func NotFoundError(message string, err error) *APIError {
 func RateLimitError(message string, retryAfter time.Duration, err error) *APIError {
 	return &APIError{
 		Code:       429,
+		StatusCode: 429,
 		Message:    message,
 		RetryAfter: retryAfter,
 		Err:        err,
@@ -166,9 +85,10 @@ func ServerError(code int, message string, err error) *APIError {
 		code = 500
 	}
 	return &APIError{
-		Code:    code,
-		Message: message,
-		Err:     err,
+		Code:       code,
+		StatusCode: code,
+		Message:    message,
+		Err:        err,
 	}
 }
 

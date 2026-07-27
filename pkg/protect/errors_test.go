@@ -4,28 +4,31 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
+	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/service"
 )
 
 func TestAPIError_Error(t *testing.T) {
 	tests := []struct {
-		name    string
-		err     *APIError
-		want    string
+		name string
+		err  *APIError
+		want string
 	}{
 		{
-			name:    "with message",
-			err:     &APIError{Message: "test error", Code: 400},
-			want:    "test error (code=400)",
+			name: "with message",
+			err:  &APIError{Message: "test error", Code: 400},
+			want: "test error (code=400)",
 		},
 		{
-			name:    "with description",
-			err:     &APIError{Description: "test description", Code: 500},
-			want:    "test description (code=500)",
+			name: "with description",
+			err:  &APIError{Description: "test description", Code: 500},
+			want: "test description (code=500)",
 		},
 		{
-			name:    "without message or description",
-			err:     &APIError{Code: 404},
-			want:    "API error (code=404)",
+			name: "without message or description",
+			err:  &APIError{Code: 404},
+			want: "API error (code=404)",
 		},
 	}
 
@@ -105,9 +108,9 @@ func TestAPIError_IsServerError(t *testing.T) {
 
 func TestAPIError_SuggestedRetryDelay(t *testing.T) {
 	tests := []struct {
-		name       string
-		err        *APIError
-		wantMin    time.Duration
+		name    string
+		err     *APIError
+		wantMin time.Duration
 	}{
 		{
 			name:    "rate limit default",
@@ -313,5 +316,40 @@ func TestIsAPIError(t *testing.T) {
 	_, ok = IsAPIError(errors.New("regular error"))
 	if ok {
 		t.Error("IsAPIError should return false for non-APIError")
+	}
+}
+
+func TestIsAPIError_ServiceError(t *testing.T) {
+	serviceError := &service.APIError{
+		Code:        429,
+		StatusCode:  429,
+		Description: "Rate Limited",
+		RetryAfter:  3 * time.Second,
+	}
+
+	apiError, ok := IsAPIError(serviceError)
+	if !ok {
+		t.Fatal("IsAPIError() did not recognize a high-level service error")
+	}
+	if apiError.Code != 429 || apiError.RetryAfter != 3*time.Second {
+		t.Fatalf("APIError = %+v", apiError)
+	}
+	if !errors.Is(serviceError, ErrRateLimit) {
+		t.Fatal("service error does not match ErrRateLimit")
+	}
+}
+
+func TestIsAPIError_SpecializedModelError(t *testing.T) {
+	err := model.NewAPIError(400, "invalid_request", "invalid request", errors.New("cause"))
+
+	apiError, ok := IsAPIError(err)
+	if !ok {
+		t.Fatalf("IsAPIError() did not recognize %T", err)
+	}
+	if apiError.Code != 400 || apiError.StatusCode != 400 || apiError.ErrorCode != "invalid_request" {
+		t.Fatalf("APIError = %+v", apiError)
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatal("specialized model error does not match ErrValidation")
 	}
 }

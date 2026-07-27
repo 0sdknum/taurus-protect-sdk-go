@@ -1,6 +1,9 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // IntegrityError indicates a cryptographic verification failure.
 // This is a security-critical error that should never be retried.
@@ -38,43 +41,110 @@ func (e *WhitelistError) Unwrap() error {
 }
 
 // APIError represents an error response from the Taurus-PROTECT API.
-// It supports errors.As for type-based error handling, and errors.Is via
-// Unwrap for cause chain matching.
 type APIError struct {
-	// StatusCode is the HTTP status code.
-	StatusCode int
-	// ErrorCode is the API error code.
-	ErrorCode string
-	// Message is the human-readable error message.
-	Message string
-	// Err is the underlying error, if any.
-	Err error
+	Message     string
+	Code        int
+	StatusCode  int
+	Description string
+	ErrorCode   string
+	// ResponseBody is the raw API error response body, when available.
+	ResponseBody string
+	Err          error
+	RetryAfter   time.Duration
 }
 
 func (e *APIError) Error() string {
-	if e.ErrorCode != "" {
-		return fmt.Sprintf("API error %d (%s): %s", e.StatusCode, e.ErrorCode, e.Message)
+	code := e.HTTPStatusCode()
+	if e.Description != "" && e.Message != "" {
+		return fmt.Sprintf("%s: %s (code=%d)", e.Description, e.Message, code)
 	}
-	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Message)
+	if e.Message != "" {
+		return fmt.Sprintf("%s (code=%d)", e.Message, code)
+	}
+	if e.Description != "" {
+		return fmt.Sprintf("%s (code=%d)", e.Description, code)
+	}
+	return fmt.Sprintf("API error (code=%d)", code)
 }
 
 func (e *APIError) Unwrap() error {
 	return e.Err
 }
 
+// As exposes the canonical APIError through specialized errors that embed it.
+func (e *APIError) As(target any) bool {
+	apiError, ok := target.(**APIError)
+	if !ok {
+		return false
+	}
+	*apiError = e
+	return true
+}
+
+// HTTPStatusCode returns the HTTP status code for this error.
+func (e *APIError) HTTPStatusCode() int {
+	if e.Code != 0 {
+		return e.Code
+	}
+	return e.StatusCode
+}
+
 // IsRetryable returns true if the error is retryable (429 or 5xx).
 func (e *APIError) IsRetryable() bool {
-	return e.StatusCode == 429 || (e.StatusCode >= 500 && e.StatusCode < 600)
+	code := e.HTTPStatusCode()
+	return code == 429 || (code >= 500 && code < 600)
 }
 
 // IsClientError returns true for 4xx errors.
 func (e *APIError) IsClientError() bool {
-	return e.StatusCode >= 400 && e.StatusCode < 500
+	code := e.HTTPStatusCode()
+	return code >= 400 && code < 500
 }
 
 // IsServerError returns true for 5xx errors.
 func (e *APIError) IsServerError() bool {
-	return e.StatusCode >= 500 && e.StatusCode < 600
+	code := e.HTTPStatusCode()
+	return code >= 500 && code < 600
+}
+
+// SuggestedRetryDelay returns the server-provided delay or a default retry delay.
+func (e *APIError) SuggestedRetryDelay() time.Duration {
+	code := e.HTTPStatusCode()
+	if code == 429 {
+		if e.RetryAfter > 0 {
+			return e.RetryAfter
+		}
+		return time.Second
+	}
+	if code >= 500 {
+		return 5 * time.Second
+	}
+	return 0
+}
+
+// Is matches API errors by HTTP status code category.
+func (e *APIError) Is(target error) bool {
+	targetError, ok := target.(*APIError)
+	if !ok {
+		return false
+	}
+	code := e.HTTPStatusCode()
+	switch targetError.HTTPStatusCode() {
+	case 400:
+		return code == 400
+	case 401:
+		return code == 401
+	case 403:
+		return code == 403
+	case 404:
+		return code == 404
+	case 429:
+		return code == 429
+	case 500:
+		return code >= 500
+	default:
+		return code == targetError.HTTPStatusCode()
+	}
 }
 
 // ValidationError represents a 400 Bad Request error.
@@ -144,6 +214,7 @@ func (e *RequestMetadataError) Unwrap() error {
 // NewAPIError creates the appropriate typed error based on the HTTP status code.
 func NewAPIError(statusCode int, errorCode string, message string, err error) error {
 	base := &APIError{
+		Code:       statusCode,
 		StatusCode: statusCode,
 		ErrorCode:  errorCode,
 		Message:    message,

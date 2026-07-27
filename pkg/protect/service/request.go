@@ -17,15 +17,17 @@ import (
 
 // RequestService provides transaction request management operations.
 type RequestService struct {
-	api       *openapi.RequestsAPIService
-	errMapper *ErrorMapper
+	api          *openapi.RequestsAPIService
+	contractsAPI *openapi.RequestsContractsAPIService
+	errMapper    *ErrorMapper
 }
 
 // NewRequestService creates a new RequestService.
 func NewRequestService(client *openapi.APIClient) *RequestService {
 	return &RequestService{
-		api:       client.RequestsAPI,
-		errMapper: NewErrorMapper(),
+		api:          client.RequestsAPI,
+		contractsAPI: client.RequestsContractsAPI,
+		errMapper:    NewErrorMapper(),
 	}
 }
 
@@ -223,6 +225,60 @@ func (s *RequestService) CreateOutgoingRequest(ctx context.Context, req *model.C
 	}
 
 	return mapper.RequestFromDTO(resp.Result), nil
+}
+
+// CreateOutgoingCallContractRequest creates an outgoing smart-contract call request.
+func (s *RequestService) CreateOutgoingCallContractRequest(ctx context.Context, request *model.CreateOutgoingCallContractRequest) (*model.Request, error) {
+	if request == nil {
+		return nil, fmt.Errorf("request cannot be nil")
+	}
+	if request.FromAddressID == "" {
+		return nil, fmt.Errorf("fromAddressID is required")
+	}
+	if request.ToWhitelistedAddressID == "" {
+		return nil, fmt.Errorf("toWhitelistedAddressID is required")
+	}
+	usesLegacyMethod := request.Method.FunctionSignature != "" || len(request.Method.Arguments) > 0
+	if usesLegacyMethod && request.Call != nil {
+		return nil, fmt.Errorf("method and call are mutually exclusive")
+	}
+
+	response, httpResponse, err := s.contractsAPI.RequestServiceCreateOutgoingCallContractRequest(ctx).
+		Body(mapper.CreateOutgoingCallContractRequestToDTO(request)).
+		Execute()
+	if err != nil {
+		return nil, s.errMapper.MapError(err, httpResponse)
+	}
+	if response == nil || response.Result == nil {
+		return nil, fmt.Errorf("failed to create contract call request")
+	}
+
+	return mapper.RequestFromDTO(response.Result), nil
+}
+
+// CreateOutgoingDeployContractRequest creates an outgoing smart-contract deployment request.
+func (s *RequestService) CreateOutgoingDeployContractRequest(ctx context.Context, request *model.CreateOutgoingDeployContractRequest) (*model.Request, error) {
+	if request == nil {
+		return nil, fmt.Errorf("request cannot be nil")
+	}
+	if request.FromAddressID == "" {
+		return nil, fmt.Errorf("fromAddressID is required")
+	}
+	if request.Contract.Blockchain == "" {
+		return nil, fmt.Errorf("contract blockchain is required")
+	}
+
+	response, httpResponse, err := s.contractsAPI.RequestServiceCreateOutgoingDeployContractRequest(ctx).
+		Body(mapper.CreateOutgoingDeployContractRequestToDTO(request)).
+		Execute()
+	if err != nil {
+		return nil, s.errMapper.MapError(err, httpResponse)
+	}
+	if response == nil || response.Result == nil {
+		return nil, fmt.Errorf("failed to create contract deployment request")
+	}
+
+	return mapper.RequestFromDTO(response.Result), nil
 }
 
 // CreateInternalTransferRequest creates an internal transfer request from one address to another.
