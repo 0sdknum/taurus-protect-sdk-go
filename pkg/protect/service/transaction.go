@@ -24,7 +24,9 @@ func NewTransactionService(client *openapi.APIClient) *TransactionService {
 	}
 }
 
-// ListTransactions retrieves a list of transactions.
+// ListTransactions retrieves a list of transactions. The API does not guarantee
+// stable ordering across pages, so incremental synchronization must overlap
+// time or block windows and deduplicate by transaction ID.
 func (s *TransactionService) ListTransactions(ctx context.Context, opts *model.ListTransactionsOptions) ([]*model.Transaction, *model.Pagination, error) {
 	req := s.api.TransactionServiceGetTransactions(ctx)
 
@@ -46,6 +48,18 @@ func (s *TransactionService) ListTransactions(ctx context.Context, opts *model.L
 		}
 		if opts.Query != "" {
 			req = req.Query(opts.Query)
+		}
+		if opts.From != nil {
+			req = req.From(*opts.From)
+		}
+		if opts.To != nil {
+			req = req.To(*opts.To)
+		}
+		if opts.FromBlockNumber != "" {
+			req = req.FromBlockNumber(opts.FromBlockNumber)
+		}
+		if opts.ToBlockNumber != "" {
+			req = req.ToBlockNumber(opts.ToBlockNumber)
 		}
 	}
 
@@ -122,7 +136,9 @@ func (s *TransactionService) GetTransactionByHash(ctx context.Context, hash stri
 	return mapper.TransactionFromDTO(&resp.Result[0]), nil
 }
 
-// ListTransactionsByAddress retrieves a list of transactions for a specific address.
+// ListTransactionsByAddress retrieves transactions for an address. The API does
+// not guarantee stable ordering across pages, so incremental synchronization must
+// overlap time or block windows and deduplicate by transaction ID.
 func (s *TransactionService) ListTransactionsByAddress(ctx context.Context, address string, opts *model.ListTransactionsByAddressOptions) ([]*model.Transaction, *model.Pagination, error) {
 	if address == "" {
 		return nil, nil, fmt.Errorf("address cannot be empty")
@@ -146,6 +162,18 @@ func (s *TransactionService) ListTransactionsByAddress(ctx context.Context, addr
 		}
 		if opts.Blockchain != "" {
 			req = req.Blockchain(opts.Blockchain)
+		}
+		if opts.From != nil {
+			req = req.From(*opts.From)
+		}
+		if opts.To != nil {
+			req = req.To(*opts.To)
+		}
+		if opts.FromBlockNumber != "" {
+			req = req.FromBlockNumber(opts.FromBlockNumber)
+		}
+		if opts.ToBlockNumber != "" {
+			req = req.ToBlockNumber(opts.ToBlockNumber)
 		}
 	}
 

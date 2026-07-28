@@ -74,6 +74,14 @@ type ListTransactionsOptions struct {
 	Blockchain string
 	// Query searches transaction fields.
 	Query string
+	// From filters transactions received after this time.
+	From *time.Time
+	// To filters transactions received before this time.
+	To *time.Time
+	// FromBlockNumber filters transactions after this block.
+	FromBlockNumber string
+	// ToBlockNumber filters transactions before this block.
+	ToBlockNumber string
 }
 
 // ListTransactionsByAddressOptions contains options for listing transactions by address.
@@ -88,6 +96,14 @@ type ListTransactionsByAddressOptions struct {
 	Direction string
 	// Blockchain filters by blockchain.
 	Blockchain string
+	// From filters transactions received after this time.
+	From *time.Time
+	// To filters transactions received before this time.
+	To *time.Time
+	// FromBlockNumber filters transactions after this block.
+	FromBlockNumber string
+	// ToBlockNumber filters transactions before this block.
+	ToBlockNumber string
 }
 
 // ExportTransactionsOptions contains options for exporting transactions.

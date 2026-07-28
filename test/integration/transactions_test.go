@@ -14,8 +14,12 @@ func TestIntegration_ListTransactions(t *testing.T) {
 	defer client.Close()
 
 	ctx := context.Background()
+	from := time.Unix(0, 0).UTC()
+	to := time.Now().UTC()
 	transactions, pagination, err := client.Transactions().ListTransactions(ctx, &model.ListTransactionsOptions{
 		Limit: 10,
+		From:  &from,
+		To:    &to,
 	})
 	if err != nil {
 		t.Fatalf("ListTransactions() error = %v", err)
@@ -162,8 +166,12 @@ func TestIntegration_ListTransactionsByAddress(t *testing.T) {
 	t.Logf("Listing transactions by address: %s", sourceAddress)
 
 	// Get transactions by address
+	from := time.Unix(0, 0).UTC()
+	to := time.Now().UTC()
 	txByAddr, pagination, err := client.Transactions().ListTransactionsByAddress(ctx, sourceAddress, &model.ListTransactionsByAddressOptions{
 		Limit: 10,
+		From:  &from,
+		To:    &to,
 	})
 	if err != nil {
 		t.Fatalf("ListTransactionsByAddress(%s) error = %v", sourceAddress, err)
