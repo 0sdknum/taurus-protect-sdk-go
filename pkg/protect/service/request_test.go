@@ -1,10 +1,15 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	protectcrypto "github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/crypto"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
 )
 
@@ -208,4 +213,82 @@ func TestVerifyRequestHash_MismatchedHash(t *testing.T) {
 	if !strings.Contains(intErr.Message, "request hash verification failed") {
 		t.Errorf("error message should mention verification failed, got %q", intErr.Message)
 	}
+}
+
+func TestRequestService_ListRequests_ArrayPayloadAndHashVerification(t *testing.T) {
+	t.Parallel()
+
+	payload := `[{"key":"currency","value":"ETH"}]`
+	server := newRequestListServer(t, "/api/rest/v2/requests", payload, protectcrypto.CalculateHexHash(payload))
+	service := NewRequestService(newServiceTestAPIClient(server))
+
+	result, err := service.ListRequests(context.Background(), &model.ListRequestsOptions{PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListRequests() error = %v", err)
+	}
+	if len(result.Requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(result.Requests))
+	}
+	if result.Requests[0].Metadata == nil || result.Requests[0].Metadata.PayloadAsString != payload {
+		t.Fatalf("metadata = %#v", result.Requests[0].Metadata)
+	}
+}
+
+func TestRequestService_ListRequests_RejectsInvalidHash(t *testing.T) {
+	t.Parallel()
+
+	server := newRequestListServer(t, "/api/rest/v2/requests", `[{"key":"currency","value":"ETH"}]`, strings.Repeat("0", 64))
+	service := NewRequestService(newServiceTestAPIClient(server))
+
+	_, err := service.ListRequests(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected integrity error")
+	}
+	var integrityError *model.IntegrityError
+	if !errors.As(err, &integrityError) {
+		t.Fatalf("error = %T, want *model.IntegrityError", err)
+	}
+}
+
+func TestRequestService_ListRequestsForApproval_RejectsInvalidHash(t *testing.T) {
+	t.Parallel()
+
+	server := newRequestListServer(t, "/api/rest/v2/requests/for-approval", `[{"key":"currency","value":"ETH"}]`, strings.Repeat("0", 64))
+	service := NewRequestService(newServiceTestAPIClient(server))
+
+	_, err := service.ListRequestsForApproval(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected integrity error")
+	}
+	var integrityError *model.IntegrityError
+	if !errors.As(err, &integrityError) {
+		t.Fatalf("error = %T, want *model.IntegrityError", err)
+	}
+}
+
+func newRequestListServer(t *testing.T, expectedPath, payloadAsString, hash string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != expectedPath {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(response).Encode(map[string]interface{}{
+			"result": []map[string]interface{}{
+				{
+					"id": "request-1",
+					"metadata": map[string]interface{}{
+						"hash":            hash,
+						"payload":         []map[string]interface{}{{"key": "currency", "value": "ETH"}},
+						"payloadAsString": payloadAsString,
+					},
+				},
+			},
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
 }

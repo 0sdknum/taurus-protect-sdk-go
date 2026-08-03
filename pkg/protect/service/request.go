@@ -103,9 +103,11 @@ func (s *RequestService) ListRequests(ctx context.Context, opts *model.ListReque
 		return nil, s.errMapper.MapError(err, httpResp)
 	}
 
-	result := &model.RequestResult{
-		Requests: mapper.RequestsFromDTO(resp.Result),
+	requests, err := mapVerifiedRequests(resp.Result)
+	if err != nil {
+		return nil, err
 	}
+	result := &model.RequestResult{Requests: requests}
 
 	if resp.Cursor != nil {
 		if resp.Cursor.CurrentPage != nil {
@@ -141,9 +143,11 @@ func (s *RequestService) ListRequestsForApproval(ctx context.Context, opts *mode
 		return nil, s.errMapper.MapError(err, httpResp)
 	}
 
-	result := &model.RequestResult{
-		Requests: mapper.RequestsFromDTO(resp.Result),
+	requests, err := mapVerifiedRequests(resp.Result)
+	if err != nil {
+		return nil, err
 	}
+	result := &model.RequestResult{Requests: requests}
 
 	if resp.Cursor != nil {
 		if resp.Cursor.CurrentPage != nil {
@@ -155,6 +159,16 @@ func (s *RequestService) ListRequestsForApproval(ctx context.Context, opts *mode
 	}
 
 	return result, nil
+}
+
+func mapVerifiedRequests(dtos []openapi.TgvalidatordRequest) ([]*model.Request, error) {
+	requests := mapper.RequestsFromDTO(dtos)
+	for _, request := range requests {
+		if err := verifyRequestHash(request); err != nil {
+			return nil, fmt.Errorf("verify request %q: %w", request.ID, err)
+		}
+	}
+	return requests, nil
 }
 
 // CreateOutgoingRequest creates a new outgoing (withdrawal) request.

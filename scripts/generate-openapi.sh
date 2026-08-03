@@ -52,6 +52,9 @@ java -jar "$GENERATOR_JAR" generate -g go -i "$SPEC_FILE" -o .codegen \
 
 # Copy generated files to internal/openapi
 cp -R .codegen/*.go internal/openapi/ 2>/dev/null || true
+for override in scripts/openapi-overrides/*.go.tmpl; do
+    cp "$override" "internal/openapi/$(basename "${override%.tmpl}")"
+done
 
 # Clean up
 rm -rf .codegen
