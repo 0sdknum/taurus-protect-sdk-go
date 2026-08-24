@@ -192,16 +192,10 @@ func (s *WhitelistedAddressService) ListWhitelistedAddresses(ctx context.Context
 		}
 	}
 
-	// Request normalized rules containers for caching optimization
-	req = req.RulesContainerNormalized(true)
-
 	resp, httpResp, err := req.Execute()
 	if err != nil {
 		return nil, nil, s.errMapper.MapError(err, httpResp)
 	}
-
-	// Build rules container cache from normalized response
-	rulesContainerCache := s.buildRulesContainerCache(resp.RulesContainers)
 
 	// SECURITY: Verify hash BEFORE calling mapper for each address.
 	// This ensures we don't extract fields from unverified PayloadAsString data.
@@ -221,12 +215,7 @@ func (s *WhitelistedAddressService) ListWhitelistedAddresses(ctx context.Context
 	// Full verification (rules container signatures, whitelist signatures) — always enforced
 	for _, addr := range addresses {
 		if addr != nil {
-			// Look up cached rules container by hash
-			var cached *model.DecodedRulesContainer
-			if addr.RulesContainerHash != "" {
-				cached = rulesContainerCache[addr.RulesContainerHash]
-			}
-			if err := s.verifyAddressWithCache(addr, cached); err != nil {
+			if err := s.verifyAddress(addr); err != nil {
 				return nil, nil, fmt.Errorf("verification failed for address %s: %w", addr.ID, err)
 			}
 		}
@@ -248,88 +237,7 @@ func (s *WhitelistedAddressService) ListWhitelistedAddresses(ctx context.Context
 	return addresses, pagination, nil
 }
 
-// buildRulesContainerCache builds a cache of verified rules containers from the
-// normalized response. When rulesContainerNormalized=true, the API returns
-// deduplicated rules containers. Each is verified once and cached by hash.
-func (s *WhitelistedAddressService) buildRulesContainerCache(containers []openapi.TgvalidatordHashRulesContainer) map[string]*model.DecodedRulesContainer {
-	cache := make(map[string]*model.DecodedRulesContainer)
-	if len(containers) == 0 || s.verifier == nil {
-		return cache
-	}
-
-	// Deduplicate by base64 container string to avoid re-verifying identical containers
-	verifiedContainers := make(map[string]*model.DecodedRulesContainer)
-
-	for _, hashContainer := range containers {
-		containerHash := ""
-		if hashContainer.Hash != nil {
-			containerHash = *hashContainer.Hash
-		}
-		containerBase64 := ""
-		if hashContainer.RulesContainer != nil {
-			containerBase64 = *hashContainer.RulesContainer
-		}
-		signaturesBase64 := ""
-		if hashContainer.RulesSignatures != nil {
-			signaturesBase64 = *hashContainer.RulesSignatures
-		}
-
-		if containerHash == "" || containerBase64 == "" {
-			continue
-		}
-
-		// Check if already verified (dedup by content)
-		decoded, exists := verifiedContainers[containerBase64]
-		if !exists {
-			var err error
-			decoded, err = s.verifier.VerifyAndDecodeRulesContainer(
-				containerBase64,
-				signaturesBase64,
-				mapper.RulesContainerFromBase64,
-				mapper.UserSignaturesFromBase64,
-			)
-			if err != nil {
-				// Skip this container on verification failure
-				continue
-			}
-			verifiedContainers[containerBase64] = decoded
-		}
-
-		cache[containerHash] = decoded
-	}
-
-	return cache
-}
-
-// verifyAddressWithCache performs verification with an optional cached rules container.
-// When cached is non-nil, steps 2-3 are skipped and RulesContainer on the address
-// may be empty (normalized mode moves it to the response-level array).
-func (s *WhitelistedAddressService) verifyAddressWithCache(addr *model.WhitelistedAddress, cached *model.DecodedRulesContainer) error {
-	if s.verifier == nil {
-		return &model.IntegrityError{Message: "verification is required but no verifier is configured"}
-	}
-
-	if addr.Metadata == nil || addr.SignedAddress == nil {
-		return &model.IntegrityError{Message: "verification enabled but required data missing"}
-	}
-
-	// When not using cache, RulesContainer must be present on the address itself
-	if cached == nil && addr.RulesContainer == "" {
-		return &model.IntegrityError{Message: "verification enabled but required data missing"}
-	}
-
-	_, err := s.verifier.VerifyWhitelistedAddress(
-		addr,
-		mapper.RulesContainerFromBase64,
-		mapper.UserSignaturesFromBase64,
-		cached,
-	)
-	return err
-}
-
-// verifyMetadataHashFromDTO verifies the metadata hash before calling the mapper.
-// SECURITY: This MUST be called before the mapper to prevent extraction of unverified data.
-// Returns nil if verification passes, or an error if hash doesn't match.
+// verifyMetadataHashFromDTO verifies the metadata hash before mapping fields from payloadAsString.
 func (s *WhitelistedAddressService) verifyMetadataHashFromDTO(dto *openapi.TgvalidatordSignedWhitelistedAddressEnvelope) error {
 	if dto == nil || dto.Metadata == nil {
 		return nil // No metadata to verify
