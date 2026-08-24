@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	protectcrypto "github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/crypto"
+	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/helper"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
 )
 
@@ -116,7 +117,140 @@ func TestWhitelistedAddressService_ListWhitelistedAddressesPreservesVerification
 	if !errors.As(err, &integrityError) {
 		t.Fatalf("error = %T %v, want *model.IntegrityError", err, err)
 	}
-	if integrityError.Message != "rulesSignatures is empty" {
+	if integrityError.Message != "rulesSignatures is empty and no verified governance rules provider is configured" {
 		t.Fatalf("IntegrityError.Message = %q", integrityError.Message)
+	}
+}
+
+func TestWhitelistedAddressService_ListWhitelistedAddressesUsesVerifiedGovernanceFallback(t *testing.T) {
+	t.Parallel()
+
+	userPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate user key: %v", err)
+	}
+	const payload = `{"address":"0xabc","label":"beneficiary"}`
+	metadataHash := protectcrypto.CalculateHexHash(payload)
+	hashes := []string{metadataHash}
+	hashesJSON, err := json.Marshal(hashes)
+	if err != nil {
+		t.Fatalf("marshal hashes: %v", err)
+	}
+	userSignature, err := protectcrypto.SignData(userPrivateKey, hashesJSON)
+	if err != nil {
+		t.Fatalf("sign hashes: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(response).Encode(map[string]any{
+			"result": []any{map[string]any{
+				"id":         "address-1",
+				"blockchain": "ETH",
+				"network":    "mainnet",
+				"metadata":   map[string]any{"hash": metadataHash, "payloadAsString": payload},
+				"signedAddress": map[string]any{"signatures": []any{map[string]any{
+					"hashes":    hashes,
+					"signature": map[string]any{"userId": "user-1", "signature": userSignature},
+				}}},
+				"rulesContainer": "AA==",
+			}},
+			"totalItems": "1",
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	providerCalls := 0
+	service := NewWhitelistedAddressServiceWithVerification(newServiceTestAPIClient(server), &WhitelistedAddressServiceConfig{
+		SuperAdminKeys:     []*ecdsa.PublicKey{&userPrivateKey.PublicKey},
+		MinValidSignatures: 1,
+		VerifiedGovernanceRulesProvider: func(_ context.Context, requested []string) (map[string]*model.DecodedRulesContainer, error) {
+			providerCalls++
+			if len(requested) != 1 || requested[0] != "AA==" {
+				t.Fatalf("requested rules containers = %v", requested)
+			}
+			return map[string]*model.DecodedRulesContainer{"AA==": {
+				Users:  []*model.RuleUser{{ID: "user-1", PublicKey: &userPrivateKey.PublicKey}},
+				Groups: []*model.RuleGroup{{ID: "approvers", UserIDs: []string{"user-1"}}},
+				AddressWhitelistingRules: []*model.AddressWhitelistingRules{{
+					Currency: "ETH",
+					Network:  "mainnet",
+					ParallelThresholds: []*model.SequentialThresholds{{Thresholds: []*model.GroupThreshold{{
+						GroupID: "approvers", MinimumSignatures: 1,
+					}}}},
+				}},
+			}}, nil
+		},
+	})
+
+	items, _, err := service.ListWhitelistedAddresses(context.Background(), &model.ListWhitelistedAddressesOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("ListWhitelistedAddresses() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "address-1" {
+		t.Fatalf("items = %+v", items)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("verified governance provider calls = %d, want 1", providerCalls)
+	}
+}
+
+func TestWhitelistedAddressService_InitializeEnvelopeUsesVerifiedGovernanceFallback(t *testing.T) {
+	t.Parallel()
+
+	userPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate user key: %v", err)
+	}
+	const payload = `{"address":"0xabc","label":"beneficiary"}`
+	metadataHash := protectcrypto.CalculateHexHash(payload)
+	hashes := []string{metadataHash}
+	hashesJSON, err := json.Marshal(hashes)
+	if err != nil {
+		t.Fatalf("marshal hashes: %v", err)
+	}
+	userSignature, err := protectcrypto.SignData(userPrivateKey, hashesJSON)
+	if err != nil {
+		t.Fatalf("sign hashes: %v", err)
+	}
+	decoded := &model.DecodedRulesContainer{
+		Users:  []*model.RuleUser{{ID: "user-1", PublicKey: &userPrivateKey.PublicKey}},
+		Groups: []*model.RuleGroup{{ID: "approvers", UserIDs: []string{"user-1"}}},
+		AddressWhitelistingRules: []*model.AddressWhitelistingRules{{
+			Currency: "ETH",
+			Network:  "mainnet",
+			ParallelThresholds: []*model.SequentialThresholds{{Thresholds: []*model.GroupThreshold{{
+				GroupID: "approvers", MinimumSignatures: 1,
+			}}}},
+		}},
+	}
+	service := &WhitelistedAddressService{
+		verifier: helper.NewWhitelistedAddressVerifier([]*ecdsa.PublicKey{&userPrivateKey.PublicKey}, 1),
+		verifiedGovernanceRulesProvider: func(_ context.Context, requested []string) (map[string]*model.DecodedRulesContainer, error) {
+			if len(requested) != 1 || requested[0] != "AA==" {
+				t.Fatalf("requested rules containers = %v", requested)
+			}
+			return map[string]*model.DecodedRulesContainer{"AA==": decoded}, nil
+		},
+	}
+	envelope := &model.WhitelistedAddressEnvelope{
+		ID:             "address-1",
+		Blockchain:     "ETH",
+		Network:        "mainnet",
+		RulesContainer: "AA==",
+		Metadata:       &model.WhitelistedAssetMetadata{Hash: metadataHash, PayloadAsString: payload},
+		SignedAddress: &model.SignedWhitelistedAddress{Signatures: []model.WhitelistSignature{{
+			Hashes:        hashes,
+			UserSignature: &model.WhitelistUserSignature{UserID: "user-1", Signature: userSignature},
+		}}},
+	}
+
+	if err := service.initializeEnvelope(context.Background(), envelope); err != nil {
+		t.Fatalf("initializeEnvelope() error = %v", err)
+	}
+	if envelope.WhitelistedAddress() == nil {
+		t.Fatal("verified whitelisted address is nil")
 	}
 }

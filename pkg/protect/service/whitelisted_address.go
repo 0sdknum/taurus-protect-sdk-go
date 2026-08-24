@@ -15,17 +15,22 @@ import (
 
 // WhitelistedAddressService provides whitelisted address management operations.
 type WhitelistedAddressService struct {
-	api       *openapi.AddressWhitelistingAPIService
-	errMapper *ErrorMapper
-	verifier  *helper.WhitelistedAddressVerifier
+	api                             *openapi.AddressWhitelistingAPIService
+	errMapper                       *ErrorMapper
+	verifier                        *helper.WhitelistedAddressVerifier
+	verifiedGovernanceRulesProvider VerifiedGovernanceRulesProvider
 }
 
 // WhitelistedAddressServiceConfig holds configuration for the WhitelistedAddressService.
+type VerifiedGovernanceRulesProvider func(context.Context, []string) (map[string]*model.DecodedRulesContainer, error)
+
 type WhitelistedAddressServiceConfig struct {
 	// SuperAdminKeys are the public keys used to verify governance rules signatures.
 	SuperAdminKeys []*ecdsa.PublicKey
 	// MinValidSignatures is the minimum number of valid SuperAdmin signatures required.
 	MinValidSignatures int
+	// VerifiedGovernanceRulesProvider supplies the authoritative rules container after SuperAdmin verification.
+	VerifiedGovernanceRulesProvider VerifiedGovernanceRulesProvider
 }
 
 // NewWhitelistedAddressServiceWithVerification creates a new WhitelistedAddressService with
@@ -46,6 +51,7 @@ func NewWhitelistedAddressServiceWithVerification(
 			config.SuperAdminKeys,
 			config.MinValidSignatures,
 		)
+		svc.verifiedGovernanceRulesProvider = config.VerifiedGovernanceRulesProvider
 	}
 
 	return svc
@@ -80,7 +86,11 @@ func (s *WhitelistedAddressService) GetWhitelistedAddress(ctx context.Context, i
 
 	// Full verification (rules container signatures, whitelist signatures) — always enforced
 	if addr != nil {
-		if err := s.verifyAddress(addr); err != nil {
+		verifiedRules, err := s.loadVerifiedGovernanceRules(ctx, []*model.WhitelistedAddress{addr})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.verifyAddress(addr, verifiedRules); err != nil {
 			return nil, err
 		}
 	}
@@ -213,9 +223,13 @@ func (s *WhitelistedAddressService) ListWhitelistedAddresses(ctx context.Context
 	addresses := mapper.WhitelistedAddressesFromDTO(resp.Result)
 
 	// Full verification (rules container signatures, whitelist signatures) — always enforced
+	verifiedRules, err := s.loadVerifiedGovernanceRules(ctx, addresses)
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, addr := range addresses {
 		if addr != nil {
-			if err := s.verifyAddress(addr); err != nil {
+			if _, err := s.verifyAddress(addr, verifiedRules); err != nil {
 				return nil, nil, fmt.Errorf("verification failed for address %s: %w", addr.ID, err)
 			}
 		}
@@ -264,25 +278,62 @@ func (s *WhitelistedAddressService) verifyMetadataHashFromDTO(dto *openapi.Tgval
 	return nil
 }
 
-// verifyAddress performs the 6-step integrity verification on a whitelisted address.
-// Returns nil if verification passes, or an error describing the failure.
-func (s *WhitelistedAddressService) verifyAddress(addr *model.WhitelistedAddress) error {
+func (s *WhitelistedAddressService) loadVerifiedGovernanceRules(ctx context.Context, addresses []*model.WhitelistedAddress) (map[string]*model.DecodedRulesContainer, error) {
+	targets := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, addr := range addresses {
+		if addr == nil || addr.RulesSignatures != "" || addr.RulesContainer == "" {
+			continue
+		}
+		if _, exists := seen[addr.RulesContainer]; exists {
+			continue
+		}
+		seen[addr.RulesContainer] = struct{}{}
+		targets = append(targets, addr.RulesContainer)
+	}
+	if len(targets) == 0 {
+		return map[string]*model.DecodedRulesContainer{}, nil
+	}
+	if s.verifiedGovernanceRulesProvider == nil {
+		return nil, &model.IntegrityError{Message: "rulesSignatures is empty and no verified governance rules provider is configured"}
+	}
+	verified, err := s.verifiedGovernanceRulesProvider(ctx, targets)
+	if err != nil {
+		return nil, fmt.Errorf("load verified governance rules: %w", err)
+	}
+	for _, target := range targets {
+		if verified[target] == nil {
+			return nil, &model.IntegrityError{Message: "verified governance rules are incomplete"}
+		}
+	}
+	return verified, nil
+}
+
+// verifyAddress performs fail-closed verification using envelope signatures or exact matching verified governance rules.
+func (s *WhitelistedAddressService) verifyAddress(addr *model.WhitelistedAddress, fallback map[string]*model.DecodedRulesContainer) (*helper.VerificationResult, error) {
 	if s.verifier == nil {
-		return &model.IntegrityError{Message: "verification is required but no verifier is configured"}
+		return nil, &model.IntegrityError{Message: "verification is required but no verifier is configured"}
 	}
-
-	// Verification is enabled but required data is missing — this is an error.
-	// An attacker could strip verification data to bypass checks.
 	if addr.Metadata == nil || addr.RulesContainer == "" || addr.SignedAddress == nil {
-		return &model.IntegrityError{Message: "verification enabled but required data missing"}
+		return nil, &model.IntegrityError{Message: "verification enabled but required data missing"}
 	}
-
-	_, err := s.verifier.VerifyWhitelistedAddress(
+	if addr.RulesSignatures != "" {
+		return s.verifier.VerifyWhitelistedAddress(
+			addr,
+			mapper.RulesContainerFromBase64,
+			mapper.UserSignaturesFromBase64,
+		)
+	}
+	decoded := fallback[addr.RulesContainer]
+	if decoded == nil {
+		return nil, &model.IntegrityError{Message: "verified governance rules are incomplete"}
+	}
+	return s.verifier.VerifyWhitelistedAddress(
 		addr,
 		mapper.RulesContainerFromBase64,
 		mapper.UserSignaturesFromBase64,
+		decoded,
 	)
-	return err
 }
 
 // GetWhitelistedAddressEnvelope retrieves a whitelisted address envelope by ID and performs
@@ -326,7 +377,7 @@ func (s *WhitelistedAddressService) GetWhitelistedAddressEnvelope(
 	envelope := mapper.WhitelistedAddressEnvelopeFromDTO(resp.Result)
 
 	// Initialize and verify the envelope
-	if err := s.initializeEnvelope(envelope); err != nil {
+	if err := s.initializeEnvelope(ctx, envelope); err != nil {
 		return nil, err
 	}
 
@@ -334,7 +385,7 @@ func (s *WhitelistedAddressService) GetWhitelistedAddressEnvelope(
 }
 
 // initializeEnvelope performs the 6-step verification and populates the verified fields.
-func (s *WhitelistedAddressService) initializeEnvelope(envelope *model.WhitelistedAddressEnvelope) error {
+func (s *WhitelistedAddressService) initializeEnvelope(ctx context.Context, envelope *model.WhitelistedAddressEnvelope) error {
 	if envelope == nil {
 		return fmt.Errorf("envelope cannot be nil")
 	}
@@ -364,11 +415,11 @@ func (s *WhitelistedAddressService) initializeEnvelope(envelope *model.Whitelist
 	}
 
 	// Perform the 6-step verification
-	result, err := s.verifier.VerifyWhitelistedAddress(
-		tempAddr,
-		mapper.RulesContainerFromBase64,
-		mapper.UserSignaturesFromBase64,
-	)
+	verifiedRules, err := s.loadVerifiedGovernanceRules(ctx, []*model.WhitelistedAddress{tempAddr})
+	if err != nil {
+		return err
+	}
+	result, err := s.verifyAddress(tempAddr, verifiedRules)
 	if err != nil {
 		return err
 	}

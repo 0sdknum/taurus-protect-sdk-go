@@ -82,8 +82,8 @@ type Client struct {
 	scores               *service.ScoreService
 	statistics           *service.StatisticsService
 	tokenMetadata        *service.TokenMetadataService
-	userDevices             *service.UserDeviceService
-	multiFactorSignature    *service.MultiFactorSignatureService
+	userDevices          *service.UserDeviceService
+	multiFactorSignature *service.MultiFactorSignatureService
 	// Taurus Network namespace client
 	taurusNetwork *TaurusNetworkClient
 }
@@ -288,7 +288,13 @@ func (c *Client) GovernanceRules() *service.GovernanceRuleService {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.governanceRules == nil {
-		c.governanceRules = service.NewGovernanceRuleService(c.apiClient)
+		c.governanceRules = service.NewGovernanceRuleServiceWithVerification(
+			c.apiClient,
+			&service.GovernanceRuleServiceConfig{
+				SuperAdminKeys:     c.superAdminKeys,
+				MinValidSignatures: c.minValidSignatures,
+			},
+		)
 	}
 	return c.governanceRules
 }
@@ -344,8 +350,9 @@ func (c *Client) WhitelistedAddresses() *service.WhitelistedAddressService {
 		c.whitelistedAddresses = service.NewWhitelistedAddressServiceWithVerification(
 			c.apiClient,
 			&service.WhitelistedAddressServiceConfig{
-				SuperAdminKeys:     c.superAdminKeys,
-				MinValidSignatures: c.minValidSignatures,
+				SuperAdminKeys:                  c.superAdminKeys,
+				MinValidSignatures:              c.minValidSignatures,
+				VerifiedGovernanceRulesProvider: c.resolveVerifiedGovernanceRules,
 			},
 		)
 	}
@@ -904,3 +911,67 @@ func (c *Client) TaurusNetwork() *TaurusNetworkClient {
 
 // Ensure Client implements io.Closer
 var _ io.Closer = (*Client)(nil)
+
+func (c *Client) resolveVerifiedGovernanceRules(ctx context.Context, targets []string) (map[string]*model.DecodedRulesContainer, error) {
+	governance := c.GovernanceRules()
+	pending := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		pending[target] = struct{}{}
+	}
+	resolved := make(map[string]*model.DecodedRulesContainer, len(pending))
+	verifyMatch := func(rules *model.GovernanceRuleset) error {
+		if rules == nil {
+			return nil
+		}
+		if _, wanted := pending[rules.RulesContainer]; !wanted {
+			return nil
+		}
+		decoded, err := governance.GetDecodedRulesContainer(rules)
+		if err != nil {
+			return err
+		}
+		resolved[rules.RulesContainer] = decoded
+		delete(pending, rules.RulesContainer)
+		return nil
+	}
+
+	current, err := governance.GetRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyMatch(current); err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return resolved, nil
+	}
+
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for {
+		if _, seen := seenCursors[cursor]; seen {
+			return nil, &model.IntegrityError{Message: "governance rules history cursor repeated"}
+		}
+		seenCursors[cursor] = struct{}{}
+		history, err := governance.GetRulesHistory(ctx, &model.ListRulesHistoryOptions{Limit: 100, Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		if history == nil {
+			return nil, &model.IntegrityError{Message: "governance rules history response is empty"}
+		}
+		for _, rules := range history.Rules {
+			if err := verifyMatch(rules); err != nil {
+				return nil, err
+			}
+		}
+		if len(pending) == 0 {
+			return resolved, nil
+		}
+		if history.Cursor == "" {
+			break
+		}
+		cursor = history.Cursor
+	}
+	return nil, &model.IntegrityError{Message: "matching signed governance rules were not found"}
+}

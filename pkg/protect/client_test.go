@@ -1,13 +1,20 @@
 package protect
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
 )
 
 // testKey is a package-level test key generated once at init time for unit tests.
@@ -1087,4 +1094,52 @@ func TestClient_ConfigurationAccessors(t *testing.T) {
 			t.Errorf("BaseURL() = %q, want %q", client.BaseURL(), expected)
 		}
 	})
+}
+
+func TestClientResolveVerifiedGovernanceRulesUsesMatchingHistory(t *testing.T) {
+	t.Parallel()
+
+	var historyCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/rest/v1/rules":
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"result": map[string]any{"rulesContainer": "AQ==", "rulesSignatures": []any{}},
+			})
+		case "/api/rest/v1/rules/history":
+			historyCalls.Add(1)
+			_ = json.NewEncoder(response).Encode(map[string]any{
+				"result":     []any{map[string]any{"rulesContainer": "AA==", "rulesSignatures": []any{}}},
+				"totalItems": "1",
+				"cursor":     "",
+			})
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL,
+		WithCredentials("key", "deadbeef"),
+		WithSuperAdminKeys([]*ecdsa.PublicKey{&testKey.PublicKey}),
+		WithMinValidSignatures(1),
+		WithHTTPClient(server.Client()),
+	)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	_, err = client.resolveVerifiedGovernanceRules(context.Background(), []string{"AA=="})
+	var integrityError *model.IntegrityError
+	if !errors.As(err, &integrityError) {
+		t.Fatalf("error = %T %v, want *model.IntegrityError", err, err)
+	}
+	if integrityError.Message != "no signatures provided for governance rules" {
+		t.Fatalf("IntegrityError.Message = %q", integrityError.Message)
+	}
+	if historyCalls.Load() != 1 {
+		t.Fatalf("history calls = %d, want 1", historyCalls.Load())
+	}
 }
