@@ -102,7 +102,7 @@ func VerifyHashCoverage(hash string, signatures []model.WhitelistSignature) bool
 // DecodeBase64 decodes a base64-encoded string.
 // Returns the decoded bytes or an error.
 func DecodeBase64(encoded string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(encoded)
+	return crypto.DecodeBase64(encoded)
 }
 
 // EncodeBase64 encodes bytes to base64 string.

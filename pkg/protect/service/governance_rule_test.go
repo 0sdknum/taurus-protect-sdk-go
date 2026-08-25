@@ -1,8 +1,14 @@
 package service
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
+	"strings"
 	"testing"
 
+	protectcrypto "github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/crypto"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
 )
 
@@ -97,4 +103,32 @@ func TestNewGovernanceRuleService(t *testing.T) {
 	// This would panic with nil, which is expected
 	// service := NewGovernanceRuleService(nil)
 	// We just verify the function signature is correct
+}
+
+func TestGovernanceRuleService_VerifyGovernanceRulesJavaCompatibleBase64(t *testing.T) {
+	t.Parallel()
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	rulesData := []byte("governance rules")
+	signature, err := protectcrypto.SignData(privateKey, rulesData)
+	if err != nil {
+		t.Fatalf("sign rules: %v", err)
+	}
+	signature = strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(signature), "=")
+
+	service := &GovernanceRuleService{
+		superAdminKeys:     []*ecdsa.PublicKey{&privateKey.PublicKey},
+		minValidSignatures: 1,
+	}
+	rules := &model.GovernanceRuleset{
+		RulesContainer: "! \t" + base64.RawURLEncoding.EncodeToString(rulesData) + "\r\n#",
+		Signatures:     []model.RuleUserSignature{{UserID: "admin", Signature: signature}},
+	}
+
+	if err := service.VerifyGovernanceRules(rules); err != nil {
+		t.Fatalf("VerifyGovernanceRules() error = %v", err)
+	}
 }

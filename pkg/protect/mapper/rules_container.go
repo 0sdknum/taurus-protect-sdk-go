@@ -12,7 +12,7 @@ import (
 
 // RulesContainerFromBase64 decodes a base64-encoded protobuf RulesContainer into a model.
 func RulesContainerFromBase64(base64Data string) (*model.DecodedRulesContainer, error) {
-	data, err := base64.StdEncoding.DecodeString(base64Data)
+	data, err := crypto.DecodeBase64(base64Data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64: %w", err)
 	}
@@ -242,7 +242,7 @@ func transactionRulesFromProto(pb *pb.RulesContainer_TransactionRules) *model.Tr
 
 // UserSignaturesFromBase64 decodes base64-encoded protobuf UserSignatures into model.
 func UserSignaturesFromBase64(base64Data string) ([]*model.RuleUserSignature, error) {
-	data, err := base64.StdEncoding.DecodeString(base64Data)
+	data, err := crypto.DecodeBase64(base64Data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64: %w", err)
 	}

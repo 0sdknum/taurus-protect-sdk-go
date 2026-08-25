@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/base64"
 	"fmt"
 	"strconv"
 
 	"github.com/0sdknum/taurus-protect-sdk-go/internal/openapi"
+	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/crypto"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/helper"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/mapper"
 	"github.com/0sdknum/taurus-protect-sdk-go/pkg/protect/model"
@@ -191,7 +191,7 @@ func (s *GovernanceRuleService) VerifyGovernanceRules(rules *model.GovernanceRul
 	}
 
 	// Decode the rules container data
-	rulesData, err := base64.StdEncoding.DecodeString(rules.RulesContainer)
+	rulesData, err := crypto.DecodeBase64(rules.RulesContainer)
 	if err != nil {
 		return &model.IntegrityError{
 			Message: fmt.Sprintf("failed to decode rules container: %v", err),

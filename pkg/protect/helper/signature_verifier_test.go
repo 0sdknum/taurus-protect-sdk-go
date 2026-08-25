@@ -104,7 +104,8 @@ func TestDecodeBase64(t *testing.T) {
 	}{
 		{"valid base64", base64.StdEncoding.EncodeToString([]byte("hello")), false},
 		{"empty string", "", false}, // Empty string decodes to empty bytes without error
-		{"invalid base64", "not-valid-base64!!!", true},
+		{"unsupported bytes ignored; values covered by crypto decoder tests", "not-valid-base64!!!", false},
+		{"incomplete quantum; values covered by crypto decoder tests", "A", false},
 		{"valid empty content", base64.StdEncoding.EncodeToString([]byte("")), false},
 	}
 
@@ -138,8 +139,8 @@ func TestIsValidSignature(t *testing.T) {
 		t.Fatalf("Failed to sign: %v", err)
 	}
 
-	// Encode signature in the expected format (r || s as raw bytes)
-	sigBytes := append(r.Bytes(), s.Bytes()...)
+	// Encode signature in the expected fixed-width P-256 format (r || s).
+	sigBytes := append(padTo32Bytes(r.Bytes()), padTo32Bytes(s.Bytes())...)
 	validSig := base64.StdEncoding.EncodeToString(sigBytes)
 
 	t.Run("valid signature", func(t *testing.T) {
@@ -149,7 +150,7 @@ func TestIsValidSignature(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid signature", func(t *testing.T) {
+	t.Run("wrong-length decoded signature", func(t *testing.T) {
 		result := IsValidSignature(testData, "invalid-base64", []*ecdsa.PublicKey{&privateKey.PublicKey})
 		if result {
 			t.Error("IsValidSignature() = true for invalid signature")

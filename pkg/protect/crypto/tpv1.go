@@ -213,7 +213,7 @@ func VerifySignature(publicKey *ecdsa.PublicKey, data []byte, base64Signature st
 		return false, fmt.Errorf("only P-256 curve is supported for signature verification")
 	}
 
-	sig, err := base64.StdEncoding.DecodeString(base64Signature)
+	sig, err := DecodeBase64(base64Signature)
 	if err != nil {
 		return false, fmt.Errorf("failed to decode signature: %w", err)
 	}

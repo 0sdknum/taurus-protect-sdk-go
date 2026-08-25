@@ -13,9 +13,9 @@ import (
 
 // testFixture holds the structure of the test fixture file.
 type testFixture struct {
-	RulesSignatures     string          `json:"rulesSignatures"`
-	RulesContainerJSON  json.RawMessage `json:"rulesContainerJson"`
-	Metadata            *struct {
+	RulesSignatures    string          `json:"rulesSignatures"`
+	RulesContainerJSON json.RawMessage `json:"rulesContainerJson"`
+	Metadata           *struct {
 		Hash            string `json:"hash"`
 		PayloadAsString string `json:"payloadAsString"`
 	} `json:"metadata"`
@@ -509,6 +509,60 @@ func TestInvalidSignaturesBase64RaisesError(t *testing.T) {
 			_, err := UserSignaturesFromBase64(tt.input)
 			if err == nil {
 				t.Error("UserSignaturesFromBase64() expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestRulesContainerFromBase64JavaCompatible(t *testing.T) {
+	t.Parallel()
+
+	raw, err := proto.Marshal(createTestRulesContainer())
+	if err != nil {
+		t.Fatalf("marshal rules container: %v", err)
+	}
+	standard := base64.StdEncoding.EncodeToString(raw)
+	variants := map[string]string{
+		"standard padded":                  standard,
+		"standard unpadded":                strings.TrimRight(standard, "="),
+		"URL safe unpadded":                strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(standard), "="),
+		"whitespace and unsupported bytes": "! \t" + standard[:4] + "\r\n" + standard[4:] + "#",
+	}
+
+	for name, encoded := range variants {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := RulesContainerFromBase64(encoded); err != nil {
+				t.Fatalf("RulesContainerFromBase64() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestUserSignaturesFromBase64JavaCompatible(t *testing.T) {
+	t.Parallel()
+
+	raw, err := proto.Marshal(&pb.UserSignatures{Signatures: []*pb.UserSignature{{UserId: "admin", Signature: []byte{1, 2, 3}}}})
+	if err != nil {
+		t.Fatalf("marshal signatures: %v", err)
+	}
+	standard := base64.StdEncoding.EncodeToString(raw)
+	variants := map[string]string{
+		"standard padded":                  standard,
+		"standard unpadded":                strings.TrimRight(standard, "="),
+		"URL safe unpadded":                strings.TrimRight(strings.NewReplacer("+", "-", "/", "_").Replace(standard), "="),
+		"whitespace and unsupported bytes": "! \t" + standard[:4] + "\r\n" + standard[4:] + "#",
+	}
+
+	for name, encoded := range variants {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			signatures, err := UserSignaturesFromBase64(encoded)
+			if err != nil {
+				t.Fatalf("UserSignaturesFromBase64() error = %v", err)
+			}
+			if len(signatures) != 1 || signatures[0].UserID != "admin" {
+				t.Fatalf("UserSignaturesFromBase64() = %+v", signatures)
 			}
 		})
 	}
